@@ -462,8 +462,16 @@ from ai_utils import generate_chat_response, analyze_table
 UPLOAD_FOLDER = "excel_uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Initialize database
-db.init_db()
+# Initialize database with error handling
+try:
+    if not db.init_db():
+        st.warning("⚠️ Could not connect to the database. Some features may be limited.")
+        st.session_state.db_available = False
+    else:
+        st.session_state.db_available = True
+except Exception as e:
+    st.error(f"⚠️ Database initialization error: {str(e)}")
+    st.session_state.db_available = False
 
 # Page configuration
 st.set_page_config(
