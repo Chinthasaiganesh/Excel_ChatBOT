@@ -8,29 +8,77 @@ import requests
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from .env file in the same directory as app.py
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+load_dotenv(env_path)
 
-# Groq API Configuration
-GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-if not GROQ_API_KEY:
-    st.error("GROQ_API_KEY not found in environment variables. Please set it in .env file.")
+# Debug: Print current working directory and .env path
+print(f"Current working directory: {os.getcwd()}")
+print(f"Loading .env from: {env_path}")
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+# OpenAI API Configuration
+try:
+    # Try to load from environment
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '').strip()  # Add strip() to remove any whitespace
+    
+    # Debug output
+    print(f"Loaded OPENAI_API_KEY length: {len(OPENAI_API_KEY) if OPENAI_API_KEY else 0}")
+    
+    if not OPENAI_API_KEY:
+        st.error("❌ OPENAI_API_KEY not found in environment variables. Please check your .env file.")
+        st.stop()
+        
+    # Simple validation that the key starts with 'sk-'
+    if not OPENAI_API_KEY.startswith('sk-'):
+        st.error(f"❌ Invalid API key format. OpenAI API key should start with 'sk-'. Got: '{OPENAI_API_KEY[:10]}...'")
+        st.stop()
+        
+    print("✅ OpenAI API key loaded and validated successfully")
+    
+    # Test the API key with a simple request to OpenAI
+    test_headers = {
+        'Authorization': f'Bearer {OPENAI_API_KEY}',
+        'Content-Type': 'application/json'
+    }
+    test_data = {
+        'model': 'gpt-3.5-turbo',
+        'messages': [{'role': 'user', 'content': 'test'}],
+        'max_tokens': 5
+    }
+    
+    try:
+        response = requests.post(
+            'https://api.openai.com/v1/chat/completions',
+            headers=test_headers,
+            json=test_data,
+            timeout=10
+        )
+        if response.status_code == 200:
+            print("✅ OpenAI API key is valid and working")
+        else:
+            st.error(f"❌ OpenAI API key validation failed with status {response.status_code}: {response.text}")
+            st.stop()
+    except Exception as e:
+        st.error(f"❌ Error validating OpenAI API key: {str(e)}")
+        st.stop()
+        
+except Exception as e:
+    st.error(f"❌ Error initializing OpenAI API: {str(e)}")
+    st.stop()
 
-# Initialize Groq client with Llama model by default
-def get_groq_response(messages: List[Dict[str, str]], 
-                    model: str = "llama3-70b-8192",
-                    temperature: float = 0.3,  # Lower temperature for more focused responses
-                    max_tokens: int = 3000,  # Increased for Llama 3
-                    top_p: float = 0.9) -> str:  # Adjusted for better results with Llama
+# Initialize OpenAI client with GPT model by default
+def get_openai_response(messages: List[Dict[str, str]], 
+                     model: str = "gpt-3.5-turbo",
+                     temperature: float = 0.3,  # Lower temperature for more focused responses
+                     max_tokens: int = 1000,  # Adjusted for OpenAI models
+                     top_p: float = 0.9) -> str:  # Adjusted for better results with GPT
     """
-    Get response from Groq API with enhanced error handling and parameters
+    Get response from OpenAI API with enhanced error handling and parameters
     
     Args:
         messages: List of message dictionaries with 'role' and 'content'
-        model: The model to use (default: mixtral-8x7b-32768)
-        temperature: Controls randomness (0.0 to 1.0)
+        model: The model to use (default: gpt-3.5-turbo)
+        temperature: Controls randomness (0.0 to 2.0)
         max_tokens: Maximum number of tokens to generate
         top_p: Controls diversity via nucleus sampling (0.0 to 1.0)
         
@@ -39,9 +87,9 @@ def get_groq_response(messages: List[Dict[str, str]],
     """
     try:
         # Get API key from environment
-        api_key = os.getenv("GROQ_API_KEY")
+        api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            return "Error: GROQ_API_KEY environment variable not set"
+            return "Error: OPENAI_API_KEY environment variable not set"
         
         # Validate parameters
         if not isinstance(messages, list) or not messages:
@@ -50,81 +98,56 @@ def get_groq_response(messages: List[Dict[str, str]],
         if temperature < 0 or temperature > 2:
             return "Error: temperature must be between 0 and 2"
             
-        if max_tokens <= 0 or max_tokens > 8192:
-            return "Error: max_tokens must be between 1 and 8192"
-        
-        # Prepare the request
+        if max_tokens <= 0 or max_tokens > 4096:  # Max tokens for most OpenAI models
+            return "Error: max_tokens must be between 1 and 4096"
+            
+        if top_p <= 0 or top_p > 1:
+            return "Error: top_p must be between 0 and 1"
+            
+        # Prepare the API request
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Content-Type": "application/json"
         }
         
         payload = {
             "model": model,
             "messages": messages,
-            "temperature": max(0.1, min(temperature, 1.0)),  # Clamp between 0.1 and 1.0
-            "max_tokens": min(max(1, max_tokens), 4000),  # Clamp between 1 and 4000
-            "top_p": max(0.1, min(top_p, 1.0)),  # Clamp between 0.1 and 1.0
-            "frequency_penalty": 0,
-            "presence_penalty": 0,
-            "stop": None,
-            "stream": False
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+            "stop": None
         }
         
-        # Make the API request with timeout
-        start_time = time.time()
+        # Make the API request
         response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
+            "https://api.openai.com/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=120  # Increased timeout for complex queries
+            timeout=60  # Increased timeout for larger responses
         )
         
-        # Log request duration
-        duration = time.time() - start_time
-        print(f"Groq API call completed in {duration:.2f}s")
-        
-        # Check for HTTP errors
-        response.raise_for_status()
-        
-        # Parse the response
-        response_data = response.json()
-        
-        # Extract the response content
-        try:
-            content = response_data["choices"][0]["message"]["content"]
-            if not content or not content.strip():
-                return "Error: Received empty response from the AI model"
-                
-            # Log token usage if available
-            if "usage" in response_data:
-                usage = response_data["usage"]
-                print(f"Tokens used: {usage.get('total_tokens', 'N/A')} "
-                      f"(Prompt: {usage.get('prompt_tokens', 'N/A')}, "
-                      f"Completion: {usage.get('completion_tokens', 'N/A')})")
-            
-            return content.strip()
-            
-        except (KeyError, IndexError) as e:
-            return f"Error parsing API response: {str(e)}\n\nRaw response: {response.text}"
-        
-    except requests.exceptions.RequestException as e:
-        error_msg = f"API Request Error: {str(e)}"
-        if hasattr(e, 'response') and e.response is not None:
+        # Handle the response
+        if response.status_code == 200:
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        else:
+            error_msg = f"OpenAI API request failed with status {response.status_code}"
             try:
-                error_detail = e.response.json().get('error', {})
-                error_msg = f"{error_msg}\n\nError Details: {error_detail}"
+                error_detail = response.json().get("error", {}).get("message", "No error details provided")
+                error_msg += f": {error_detail}"
             except:
-                error_msg = f"{error_msg}\n\nResponse: {e.response.text[:500]}"
-        return error_msg
-        
+                error_msg += f": {response.text}"
+            return f"Error: {error_msg}"
+            
+    except requests.exceptions.RequestException as e:
+        return f"Error: Request failed - {str(e)}"
     except Exception as e:
         return f"Unexpected error: {str(e)}"
 
 def analyze_table(analysis_data: List[Dict], prompt: str) -> str:
     """
-    Analyze the table data and generate a comprehensive response using Groq API with Llama 3.
+    Analyze the table data and generate a comprehensive response using OpenAI's API.
     
     Args:
         analysis_data: List of dictionaries containing table data with metadata
@@ -134,45 +157,46 @@ def analyze_table(analysis_data: List[Dict], prompt: str) -> str:
         str: Generated analysis response with rich formatting
     """
     try:
-        # Prepare system message with detailed instructions for Llama 3
+        # Prepare system message with detailed instructions for the AI
         system_message = {
             "role": "system",
             "content": """# Excel Data Analysis Assistant
 
-You are an expert data analyst AI that helps users understand and work with Excel data. Your responses should be:
+You are an expert data analyst AI that helps users understand and work with Excel data. You have COMPLETE ACCESS to ALL DATA in the Excel file.
+
+## CRITICAL INSTRUCTIONS:
+1. You have access to the ENTIRE DATASET, not just a sample
+2. The data is provided in a JSON format with all rows included
+3. Use Python list slicing to access any part of the data:
+   - `data[-1]` for the last row
+   - `data[-3:]` for the last 3 rows
+   - `len(data)` to get total row count
+   - `[row['column_name'] for row in data]` to extract a column
+
+## Data Access Examples:
+- Last row: `data[-1]`
+- Last 3 rows: `data[-3:]`
+- Specific column: `[row['column_name'] for row in data]`
+- Filtered data: `[row for row in data if condition]`
 
 ## Response Guidelines:
-- **Accuracy**: Base responses strictly on the provided data
-- **Clarity**: Use clear, concise language with proper Markdown formatting
-- **Insightful**: Provide meaningful analysis and insights
-- **Structured**: Organize information with headers, lists, and tables
-- **Helpful**: Offer explanations and context for non-technical users
-- **Honest**: Acknowledge data limitations when present
+- **Accuracy**: Base responses on the complete dataset
+- **Completeness**: Analyze all relevant data points
+- **Clarity**: Use clear, concise language with Markdown formatting
+- **Evidence**: Include specific data points to support your answers
+- **Honesty**: If data is insufficient, explain what's missing
 
-## Data Analysis Approach:
-1. **Understand the Data**:
-   - Review all provided tables and their structures
-   - Note column names, data types, and sample values
-   - Identify relationships between tables if multiple exist
+## For Specific Queries:
+- When asked for "last X rows", use negative indexing: `data[-X:]`
+- For row counts, use `len(data)` which matches `total_rows`
+- For column operations, use list comprehensions
+- Always verify data exists before accessing it
 
-2. **Analyze the Query**:
-   - Determine the user's intent and information needs
-   - Identify which tables and columns are relevant
-   - Consider any calculations or transformations needed
-
-3. **Provide Response**:
-   - Start with a direct answer to the query
-   - Include supporting data and calculations
-   - Explain your reasoning and methodology
-   - Highlight any limitations or assumptions
-   - Suggest follow-up questions or analyses
-
-4. **Formatting**:
-   - Use Markdown for clear formatting
-   - Include tables for tabular data
-   - Use bullet points for lists
-   - **Bold** important information
-   - Add section headers for organization"""
+## Important Notes:
+- The data preview is just for human readability
+- You have access to ALL rows in the JSON data structure
+- Use Python's list and dictionary operations to analyze the data
+- If a query is about specific rows or ranges, access them directly using the methods above"""
         }
         
         # Prepare data context with better formatting and more details
@@ -198,24 +222,39 @@ You are an expert data analyst AI that helps users understand and work with Exce
                         table_info.append(f"  - `{col}` ({col_type})\n")
                     table_info.append("\n")
                 
-                # Add sample data
-                sample_data = table.get('sample_data', [])
-                if sample_data:
-                    sample_size = len(sample_data)
-                    table_info.append(f"**Sample Data (first {sample_size} rows):**\n\n")
+                # Get all data for analysis
+                all_data = table.get('data', [])
+                if all_data:
+                    total_rows = len(all_data)
+                    table_info.append(f"**Complete Data Table ({total_rows} total rows):**\n\n")
                     
-                    # Create a markdown table with alignment
+                    # Add a note about data availability
+                    table_info.append("*Note: You have access to ALL ROWS of data for analysis. "
+                                    "The table below shows a preview of the data structure.*\n\n")
+                    
+                    # For very large tables, limit the display to avoid overwhelming the context window
+                    if total_rows > 20:
+                        table_info.append(f"*Displaying first 5 rows of {total_rows} total rows. "
+                                        "All rows are available for analysis.*\n\n")
+                    
+                    # Show column headers
                     headers = " | ".join(columns)
                     separators = " | ".join([":---"] * len(columns))
                     table_info.append(f"| {headers} |\n")
                     table_info.append(f"|{separators}|\n")
                     
-                    for row in sample_data:
+                    # For small datasets, show all rows
+                    # For large datasets, just show a few rows as example
+                    max_display_rows = 5 if total_rows > 10 else total_rows
+                    for row in all_data[:max_display_rows]:
                         row_data = []
                         for col in columns:
                             cell = str(row.get(col, "")).replace("\n", " ")
                             row_data.append(cell[:50] + ("..." if len(cell) > 50 else ""))
                         table_info.append("| " + " | ".join(row_data) + " |\n")
+                    
+                    if total_rows > max_display_rows:
+                        table_info.append(f"| ... and {total_rows - max_display_rows} more rows ... |\n")
                     
                     table_info.append("\n")
                 
@@ -229,31 +268,141 @@ You are an expert data analyst AI that helps users understand and work with Exce
             
             return "\n\n".join(context)
         
-        # Prepare the user message with enhanced context and instructions
+        # Prepare the complete data context with all rows
+        def get_complete_data_context():
+            context = []
+            for idx, table in enumerate(analysis_data, 1):
+                table_info = []
+                table_name = table.get('table', f'Table {idx}')
+                sheet_name = table.get('sheet', 'Unknown Sheet')
+                total_rows = table.get('total_rows', 0)
+                
+                # Table header with metadata
+                table_info.append(f"### 📊 {table_name} (Sheet: {sheet_name})\n")
+                table_info.append(f"- **Total Rows:** {total_rows:,}\n")
+                
+                # Add column information with types
+                columns = table.get('columns', [])
+                column_types = table.get('column_types', {})
+                if columns:
+                    table_info.append("**Columns:**\n")
+                    for col in columns:
+                        col_type = column_types.get(col, 'unknown')
+                        table_info.append(f"  - `{col}` ({col_type})\n")
+                    table_info.append("\n")
+                
+                # Add complete data
+                all_data = table.get('data', [])
+                if all_data:
+                    # For large datasets, we'll include the data in a more efficient format
+                    if total_rows > 20:
+                        table_info.append(f"**Complete Dataset Summary ({total_rows} rows):**\n\n")
+                        table_info.append("*Note: The complete dataset is available for analysis. "
+                                      "The AI can access all rows to answer your questions.*\n\n")
+                        
+                        # Show first few and last few rows to give context
+                        for i, row in enumerate(all_data[:3]):
+                            row_data = [f"Row {i+1}:"]
+                            for col in columns[:5]:  # Limit to first 5 columns for display
+                                cell = str(row.get(col, "")).replace("\n", " ")
+                                row_data.append(f"{col}: {cell[:30]}" + ("..." if len(cell) > 30 else ""))
+                            table_info.append("  - " + " | ".join(row_data) + "\n")
+                        
+                        if total_rows > 6:
+                            table_info.append(f"  - ... {total_rows - 6} more rows ...\n")
+                            
+                            # Show last 3 rows
+                            for i in range(max(3, total_rows-3), total_rows):
+                                row = all_data[i]
+                                row_data = [f"Row {i+1}:"]
+                                for col in columns[:5]:  # Limit to first 5 columns for display
+                                    cell = str(row.get(col, "")).replace("\n", " ")
+                                    row_data.append(f"{col}: {cell[:30]}" + ("..." if len(cell) > 30 else ""))
+                                table_info.append("  - " + " | ".join(row_data) + "\n")
+                    else:
+                        # For smaller datasets, show all data
+                        table_info.append(f"**Complete Data Table ({total_rows} rows):**\n\n")
+                        headers = " | ".join(columns)
+                        separators = " | ".join([":---"] * len(columns))
+                        table_info.append(f"| {headers} |\n")
+                        table_info.append(f"|{separators}|\n")
+                        
+                        for row in all_data:
+                            row_data = []
+                            for col in columns:
+                                cell = str(row.get(col, "")).replace("\n", " ")
+                                row_data.append(cell[:30] + ("..." if len(cell) > 30 else ""))
+                            table_info.append("| " + " | ".join(row_data) + " |\n")
+                    
+                    table_info.append("\n")
+                
+                # Add the complete data in a structured format for the AI
+                table_info.append("\n**Complete Data (for analysis):**\n")
+                table_info.append("```json\n")
+                
+                # For analysis, we'll include all data but in a more compact format
+                analysis_data = {
+                    "table_name": table_name,
+                    "sheet_name": sheet_name,
+                    "total_rows": total_rows,
+                    "columns": columns,
+                    "data": all_data  # Include all data for analysis
+                }
+                
+                # Convert to JSON with minimal whitespace to save tokens
+                table_info.append(json.dumps(analysis_data, separators=(',', ':')))
+                table_info.append("\n```\n")
+                
+                # Add explicit instructions for specific queries
+                if total_rows > 0:
+                    table_info.append("\n**Data Access Notes:**\n")
+                    table_info.append("- To access the last row: `data[-1]`\n")
+                    table_info.append("- To access the last 3 rows: `data[-3:]`\n")
+                    table_info.append("- To count rows: `total_rows` or `len(data)`\n")
+                    table_info.append("- To get a specific column: `[row['column_name'] for row in data]`\n\n")
+                
+                context.append("".join(table_info))
+            
+            return "\n\n".join(context)
+
+        # Prepare the user message with complete data context
         user_message = {
             "role": "user",
             "content": f"""# 📊 Excel Data Analysis Request
 
-## 📝 User's Question
-{prompt}
-
 ## 📂 Data Overview
 {format_data_context()}
 
-## 📋 Analysis Instructions
-1. **Understand the Query**: Carefully analyze what the user is asking and identify the relevant data points.
-2. **Examine the Data**: Review the provided tables, their structures, and sample data.
-3. **Perform Analysis**: 
-   - If the question requires calculations, show your work
-   - If the data is insufficient, explain what's missing
-   - If the question is ambiguous, make reasonable assumptions and state them
+## ❓ User Query
+{prompt}
+
+## 🔍 IMPORTANT DATA ACCESS NOTES:
+1. You have access to ALL ROWS in the 'data' array of each table
+2. To access data, use these patterns:
+   - Last row: `data[-1]`
+   - Last 3 rows: `data[-3:]`
+   - First 5 rows: `data[:5]`
+   - Specific column: `[row['column_name'] for row in data]`
+   - Row count: `len(data)`
+
+3. The data preview is for display only - always use the complete dataset in the JSON structure for your analysis
+4. For any request about specific rows or ranges, access them directly using the methods above
+5. When showing results, include the actual data points from the complete dataset
+
+## 📝 Response Requirements:
+- Start with a clear, direct answer to the query
+- Include specific data points from the complete dataset to support your answer
+- If showing a subset of data, indicate if it's a sample from a larger dataset
+- For any calculations, state that they're based on the complete dataset
+- If the query is about specific rows (e.g., 'last 3 rows'), show the actual data from those rows
 4. **Format the Response**:
    - Start with a direct answer to the question
-   - Provide supporting evidence and calculations
+   - Provide supporting evidence and calculations from the complete dataset
    - Use Markdown formatting for clarity
    - Include relevant data points in your response
+   - For large datasets, you can summarize but make it clear you're considering all data
 
-## 🎯 Your Response:
+## 🎯 Your Response (based on complete dataset analysis):
 """
         }
         
@@ -1321,31 +1470,75 @@ def show_chat_page():
             def prepare_analysis_data():
                 print("Preparing analysis data...")
                 analysis_data = []
+                total_tables = 0
+                
+                # First, count the total number of tables across all sheets
                 for sheet_name, tables in file_data.get('tables', {}).items():
+                    total_tables += len(tables)
+                
+                print(f"Found {total_tables} tables across {len(file_data.get('tables', {}))} sheets")
+                
+                for sheet_name, tables in file_data.get('tables', {}).items():
+                    print(f"Processing sheet: {sheet_name} with {len(tables)} tables")
+                    
+                    # If no tables in sheet, try to extract data directly from the sheet
+                    if not tables:
+                        print(f"No tables found in sheet {sheet_name}, trying to extract data directly")
+                        try:
+                            # Try to read the sheet directly
+                            df = pd.read_excel(file_data['file_path'], sheet_name=sheet_name)
+                            if not df.empty:
+                                df = df.dropna(how='all').reset_index(drop=True)
+                                if not df.empty:
+                                    # Clean column names
+                                    df.columns = [str(col).strip() for col in df.columns]
+                                    # Convert all columns to string to handle mixed types
+                                    df = df.astype(str)
+                                    # Include all rows in the analysis data
+                                    table_rows = len(df)
+                                    analysis_data.append({
+                                        'sheet': sheet_name,
+                                        'table': 'Sheet Data',
+                                        'columns': list(df.columns),
+                                        'data': df.to_dict('records'),  # Store all rows
+                                        'sample_data': df.head(5).to_dict('records'),  # Keep a small sample for display
+                                        'total_rows': table_rows,
+                                        'column_types': {col: str(df[col].dtype) for col in df.columns}
+                                    })
+                                    print(f"Added sheet data from {sheet_name} with {len(df)} rows")
+                        except Exception as e:
+                            print(f"Error processing sheet {sheet_name}: {str(e)}")
+                        continue
+                    
+                    # Process each table in the sheet
                     for table_name, table_data in tables.items():
                         try:
-                            print(f"Processing table {table_name} in sheet {sheet_name}")
+                            print(f"  Processing table: {table_name}")
                             df = pd.DataFrame(table_data)
                             if not df.empty:
                                 # Clean the data
                                 df = df.dropna(how='all').reset_index(drop=True)
                                 if not df.empty:
+                                    # Clean column names
+                                    df.columns = [str(col).strip() for col in df.columns]
                                     # Convert all columns to string to handle mixed types
                                     df = df.astype(str)
-                                    # Get more rows for better context (increased from 3 to 10)
-                                    sample_size = min(10, len(df))  # Get up to 10 rows
+                                    # Store all data for analysis
+                                    table_rows = len(df)
                                     analysis_data.append({
                                         'sheet': sheet_name,
                                         'table': table_name,
                                         'columns': list(df.columns),
-                                        'sample_data': df.head(sample_size).to_dict('records'),
-                                        'total_rows': len(df),
+                                        'data': df.to_dict('records'),  # Store all rows
+                                        'sample_data': df.head(5).to_dict('records'),  # Keep a small sample for display
+                                        'total_rows': table_rows,
                                         'column_types': {col: str(df[col].dtype) for col in df.columns}
                                     })
-                                    print(f"Added table {table_name} with {len(df)} rows")
+                                    print(f"  Added table {table_name} with {table_rows} rows")
                         except Exception as e:
-                            print(f"Error processing table {table_name} in sheet {sheet_name}: {str(e)}")
-                print(f"Total tables processed: {len(analysis_data)}")
+                            print(f"  Error processing table {table_name} in sheet {sheet_name}: {str(e)}")
+                
+                print(f"Total tables/sheets processed: {len(analysis_data)}")
                 return analysis_data
             
             # Get analysis data
@@ -1354,9 +1547,9 @@ def show_chat_page():
                 raise ValueError("No valid data available for analysis. Please check if your Excel file contains valid data.")
             
             # Get AI response with error handling
-            print("Sending request to Groq API...")
+            print("Sending request to OpenAI API...")
             response = analyze_table(analysis_data, prompt)
-            print("Received response from Groq API")
+            print("Received response from OpenAI API")
             
             if not response or not response.strip():
                 response = "I'm sorry, but I couldn't generate a response. Please try again with a different question."
@@ -1485,8 +1678,8 @@ def show_chat_page():
     # Add model information
     st.sidebar.markdown("---")
     st.sidebar.markdown("### AI Model")
-    st.sidebar.info(f"Using: Llama 3 70B")
-    st.sidebar.caption("Powered by Groq API")
+    st.sidebar.info(f"Using: GPT 4.0 Turbo")
+    st.sidebar.caption("Powered by OpenAI API")
     
     # Add some helpful tips
     st.sidebar.markdown("---")
