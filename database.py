@@ -1,26 +1,48 @@
+import os
+import sqlite3
+from contextlib import contextmanager
+from typing import Generator, Optional, Dict, Any, List, Tuple
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
-from contextlib import contextmanager
-import os
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from dotenv import load_dotenv
 from models import Base, ExcelFile, ExcelTable, ChatHistory, MessageRole
-from typing import Generator, Optional, Dict, Any, List, Tuple
-from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
 
 # Load environment variables
 load_dotenv()
 
-# PostgreSQL Configuration
-POSTGRES_USER = os.getenv('POSTGRES_USER', 'postgres')
-POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'Sweethome%40143')
-POSTGRES_HOST = os.getenv('POSTGRES_HOST', 'localhost')
-POSTGRES_PORT = os.getenv('POSTGRES_PORT', '5432')
-POSTGRES_DB = os.getenv('POSTGRES_DB', 'Adora_AI')
-DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+# Default to SQLite if no PostgreSQL config is found
+USE_SQLITE = True
+DATABASE_URL = "sqlite:///app.db"
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Try to use PostgreSQL if credentials are available
+try:
+    POSTGRES_USER = os.getenv('postgres')
+    POSTGRES_PASSWORD = os.getenv('Sweethome%40143')
+    POSTGRES_HOST = os.getenv('localhost')
+    POSTGRES_PORT = os.getenv('POSTGRES_PORT', '5432')
+    POSTGRES_DB = os.getenv('POSTGRES_DB', 'Adora_AI')
+    
+    if all([POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_HOST]):
+        DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+        USE_SQLITE = False
+except Exception as e:
+    print(f"Error setting up PostgreSQL, falling back to SQLite: {str(e)}")
+    USE_SQLITE = True
+    DATABASE_URL = "sqlite:///app.db"
+
+# Create engine with connection pooling
+try:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        connect_args={"check_same_thread": False} if USE_SQLITE else {}
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+except Exception as e:
+    print(f"Error creating database engine: {str(e)}")
+    raise
 
 @contextmanager
 def get_db_session() -> Generator[scoped_session, None, None]:
@@ -37,7 +59,31 @@ def get_db_session() -> Generator[scoped_session, None, None]:
 
 def init_db():
     """Initialize the database tables."""
-    Base.metadata.create_all(bind=engine)
+    try:
+        # Create tables if they don't exist
+        Base.metadata.create_all(bind=engine)
+        print(f"Database initialized successfully at: {DATABASE_URL}")
+        return True
+    except Exception as e:
+        print(f"Error initializing database: {str(e)}")
+        if not USE_SQLITE:
+            print("Falling back to SQLite...")
+            global engine, SessionLocal, DATABASE_URL, USE_SQLITE
+            DATABASE_URL = "sqlite:///app.db"
+            USE_SQLITE = True
+            engine = create_engine(
+                DATABASE_URL,
+                connect_args={"check_same_thread": False}
+            )
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            try:
+                Base.metadata.create_all(bind=engine)
+                print("Successfully initialized SQLite database")
+                return True
+            except Exception as e2:
+                print(f"Error initializing SQLite database: {str(e2)}")
+                return False
+        return False
 
 def is_duplicate_file(file_hash: str, file_name: str = None) -> Tuple[bool, str]:
     """
